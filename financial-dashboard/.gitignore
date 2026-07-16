@@ -1,0 +1,5 @@
+# Generated outputs
+*.html
+
+# Local QB data directories (live in Claude Folder, not repo)
+qb_*/
