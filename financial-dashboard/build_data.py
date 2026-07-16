@@ -307,61 +307,94 @@ def revenue_mix_for(report, col_labels, entity):
 # ── Analytics ───────────────────────────────────────────────────────────────────
 
 def build_analytics(gm, month_pnl, labor, months_ytd):
-    ytd_rev = sum(gm[e]['total_revenue'] for e in ENTITIES)
+    ytd_rev      = sum(gm[e]['total_revenue'] for e in ENTITIES)
     total_salary = sum(labor['salaries'].values())
-    salary_pct = total_salary / ytd_rev * 100 if ytd_rev else 0
+    salary_pct   = total_salary / ytd_rev * 100 if ytd_rev else 0
+    gopm_va      = labor['salaries'].get('PM - VA / GOPM contractors', 0)
+    gopm_rev     = gm['GOPM']['total_revenue']
+    va_pct       = gopm_va / gopm_rev * 100 if gopm_rev else 0
+    ppb_avg_mo   = gm['PPB']['total_revenue'] / months_ytd if months_ytd else 0
+    eoy_run      = ytd_rev / months_ytd * 12 if months_ytd else 0
 
-    insights = []
-    actions  = []
+    actions = []
 
-    # Salary load
-    if 25 <= salary_pct <= 35:
-        insights.append({'severity': 'good',
-                         'title': f'YTD labor {salary_pct:.1f}% of YTD revenue — in 25–35% band',
-                         'detail': 'YTD labor load is in the healthy services benchmark band.'})
-    elif salary_pct > 35:
-        insights.append({'severity': 'warn',
-                         'title': f'YTD labor {salary_pct:.1f}% — above 35% benchmark',
-                         'detail': 'Review headcount and VA utilization.'})
-        actions.append('Audit labor load — salary % above 35% benchmark.')
+    # ── Data-driven: only fires when numbers actually warrant it ───────────────
 
-    # GOPM VA labor
-    gopm_va = labor['salaries'].get('PM - VA / GOPM contractors', 0)
-    gopm_rev = gm['GOPM']['total_revenue']
-    if gopm_rev:
-        va_pct = gopm_va / gopm_rev * 100
-        if va_pct > 12:
-            insights.append({'severity': 'warn',
-                             'title': f'GOPM admin labor {va_pct:.1f}% of revenue',
-                             'detail': 'PM industry benchmark for admin/VA is 5–12%.'})
-            actions.append('Audit GOPM VA/contractor workload — identify automation candidates.')
-
-    # PSB margin
-    psb_gm_pct = gm['PSB']['gross_profit'] / gm['PSB']['total_revenue'] * 100 if gm['PSB']['total_revenue'] else 0
-    if psb_gm_pct >= 25:
-        insights.append({'severity': 'good',
-                         'title': f'PSB gross margin {psb_gm_pct:.1f}% — strong for construction',
-                         'detail': 'Above 40% benchmark for specialty trade contractors.'})
-
-    # PSB month loss check
     if month_pnl['PSB']['net_income'] < 0:
-        actions.append('Review PSB jobs over $25K for margin leakage — focus on subcontractor markup.')
+        loss = abs(month_pnl['PSB']['net_income'])
+        actions.append({
+            'text':   f'PSB posted a ${loss:,.0f} loss this month — pull job-level P&L, '
+                      f'identify which jobs went over budget, and confirm subcontractor invoices match estimates.',
+            'entity': 'PSB', 'priority': 'high', 'owner': 'Victor'
+        })
 
-    # PPB
-    ppb_ni_pct = gm['PPB']['net_income'] / gm['PPB']['total_revenue'] * 100 if gm['PPB']['total_revenue'] else 0
-    if ppb_ni_pct > 10:
-        insights.append({'severity': 'good',
-                         'title': f'PPB net margin {ppb_ni_pct:.1f}% — excellent for brokerage',
-                         'detail': 'NAR small brokerage benchmark is 5–15% net margin.'})
+    if salary_pct > 35:
+        actions.append({
+            'text':   f'Labor load at {salary_pct:.1f}% of YTD revenue — above the 35% ceiling. '
+                      f'Audit VA hours and contractor usage by entity before it compresses margin further.',
+            'entity': 'Portfolio', 'priority': 'high', 'owner': 'Victor'
+        })
+    elif salary_pct > 30:
+        actions.append({
+            'text':   f'Labor load at {salary_pct:.1f}% — approaching the 35% ceiling. '
+                      f'No new contractor commitments without COO sign-off.',
+            'entity': 'Portfolio', 'priority': 'med', 'owner': 'Victor'
+        })
 
-    actions += [
-        f'Mid-year vs annual target check: forecast Dec 31 revenue from {months_ytd}-month run-rate.',
-        'GOPM staffing review — confirm property manager headcount supports door count growth.',
-        'PSB: lock in subcontractor pricing for next season before demand peak.',
-        'Build recurring PPB revenue — push asset management retainers.',
+    if va_pct > 12:
+        actions.append({
+            'text':   f'GOPM admin/VA labor at {va_pct:.1f}% of revenue (benchmark: 5–12%). '
+                      f'Map current VA task list — identify top 3 tasks to automate or eliminate.',
+            'entity': 'GOPM', 'priority': 'high', 'owner': 'Ops'
+        })
+
+    gopm_margin = gm['GOPM']['net_income'] / gopm_rev * 100 if gopm_rev else 0
+    if gopm_margin < 15:
+        actions.append({
+            'text':   f'GOPM net margin at {gopm_margin:.1f}% YTD — below 15% floor. '
+                      f'Review management fee schedule: confirm all doors are billed at current rate.',
+            'entity': 'GOPM', 'priority': 'high', 'owner': 'Victor'
+        })
+
+    if ppb_avg_mo < 15000:
+        actions.append({
+            'text':   f'PPB averaging ${ppb_avg_mo:,.0f}/mo YTD — '
+                      f'push at least 1 new asset management retainer this month to build a recurring base.',
+            'entity': 'PPB', 'priority': 'med', 'owner': 'Victor'
+        })
+
+    # ── Ops-specific: grounded in the 9-manager team ──────────────────────────
+
+    ops_pool = [
+        {'text':   f'{months_ytd}-month run-rate projects ${eoy_run:,.0f} annual revenue — '
+                   f'compare to budget targets and flag any entity tracking >10% below plan.',
+         'entity': 'Portfolio', 'priority': 'med', 'owner': 'Victor'},
+        {'text':   'PM accountability check-in: confirm all 9 managers submitted their monthly rocks update. '
+                   'Escalate any missing submissions before end of week.',
+         'entity': 'GOPM', 'priority': 'med', 'owner': 'Victor'},
+        {'text':   'Pull open maintenance WOs over 30 days — flag vendors with 2+ stalled jobs '
+                   'and issue written performance warnings.',
+         'entity': 'GOPM', 'priority': 'med', 'owner': 'Ops'},
+        {'text':   'PSB pipeline review: confirm all active jobs have a signed contract '
+                   'and a scheduled completion date on file.',
+         'entity': 'PSB', 'priority': 'med', 'owner': 'Ops'},
+        {'text':   'Vendor audit: confirm all active vendors have a valid COI on file '
+                   'and current pricing agreed. Flag any expired.',
+         'entity': 'GOPM', 'priority': 'low', 'owner': 'Ops'},
+        {'text':   'HOA/condo compliance: confirm all associations have board meeting minutes '
+                   'filed within 30 days of last meeting.',
+         'entity': 'GOPM', 'priority': 'low', 'owner': 'Ops'},
+        {'text':   'PSB: lock in subcontractor rates for the next 60 days — '
+                   'renegotiate if material costs shifted more than 5% since last agreement.',
+         'entity': 'PSB', 'priority': 'low', 'owner': 'Ops'},
     ]
 
-    return {'insights': insights, 'actions': actions[:7]}
+    for a in ops_pool:
+        if len(actions) >= 7:
+            break
+        actions.append(a)
+
+    return {'insights': [], 'actions': actions[:7]}
 
 
 # ── Main ────────────────────────────────────────────────────────────────────────

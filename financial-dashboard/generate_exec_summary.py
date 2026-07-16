@@ -556,8 +556,45 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
     eoy = {e: gm[e]['total_revenue'] * 12 / months_elapsed for e in entities}
     eoy_total = sum(eoy.values())
 
-    # Actions & insights
-    actions  = an.get('actions', [])
+    # Actions — normalize to dicts, prepend MoM-driven actions
+    raw_actions = an.get('actions', [])
+    def _norm_action(a):
+        if isinstance(a, dict):
+            return a
+        e = 'GOPM' if 'GOPM' in a else ('PSB' if 'PSB' in a else ('PPB' if 'PPB' in a else 'Portfolio'))
+        return {'text': a, 'entity': e, 'priority': 'med', 'owner': '—'}
+
+    base_actions = [_norm_action(a) for a in raw_actions]
+
+    # Prepend MoM revenue actions for any entity with a significant move
+    mom_actions = []
+    for e in entities:
+        rm = rev_moms[e]
+        cur_rev  = mp[e]['total_revenue']
+        pri_rev  = mp_prior[e]['total_revenue']
+        delta    = cur_rev - pri_rev
+        if rm <= -30:
+            mom_actions.append({
+                'text':   f'{e} revenue {rm:+.0f}% MoM (${cur_rev:,.0f} vs ${pri_rev:,.0f}, '
+                          f'${abs(delta):,.0f} drop) — identify the specific line items that fell '
+                          f'and confirm whether this is a timing shift or a lost account.',
+                'entity': e, 'priority': 'high', 'owner': 'Victor'
+            })
+        elif -30 < rm <= -15:
+            mom_actions.append({
+                'text':   f'{e} revenue {rm:+.0f}% MoM (${cur_rev:,.0f} vs ${pri_rev:,.0f}) — '
+                          f'review top revenue lines for the drop and flag any at-risk accounts.',
+                'entity': e, 'priority': 'med', 'owner': 'Victor'
+            })
+        elif rm >= 20:
+            mom_actions.append({
+                'text':   f'{e} revenue {rm:+.0f}% MoM (${cur_rev:,.0f} vs ${pri_rev:,.0f}) — '
+                          f'confirm this is sustainable or a one-time event before projecting forward.',
+                'entity': e, 'priority': 'low', 'owner': 'Victor'
+            })
+
+    # Merge: MoM actions first, then base (deduplicated by entity+priority)
+    actions = (mom_actions + base_actions)[:7]
 
     # Due dates
     due_red   = (report_date + timedelta(days=15)).strftime('%b %d')
@@ -748,19 +785,31 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
                          "— snow removal revenue does not recur.</div>")
 
     # ── Action items rows ──
+    priority_cfg = {
+        'high': ('#dc2626', '#fef2f2', due_red),
+        'med':  ('#d97706', '#fffbeb', due_amber),
+        'low':  ('#64748b', '#f8fafc', due_amber),
+    }
+    entity_badge_cls = {'GOPM': 'neutral', 'PSB': 'green', 'PPB': 'amber', 'Portfolio': 'green'}
+
     action_rows = ""
     for i, action in enumerate(actions[:7], 1):
-        e_tag   = 'GOPM' if 'GOPM' in action else ('PSB' if 'PSB' in action else 'PPB')
-        tag_cls = 'amber' if e_tag == 'GOPM' else 'green'
-        is_red  = i <= len(red_entities)
-        due     = due_red if is_red else due_amber
-        num_color = '#dc2626' if is_red else '#d97706'
+        pri      = action.get('priority', 'med')
+        e_tag    = action.get('entity', 'Portfolio')
+        owner    = action.get('owner', '—')
+        text     = action.get('text', str(action))
+        clr, bg, due = priority_cfg.get(pri, priority_cfg['med'])
+        badge_cls    = entity_badge_cls.get(e_tag, 'green')
+        pri_label    = pri.upper()
         action_rows += f'''
         <tr>
-          <td style="text-align:center;font-weight:700;color:{num_color};">{i}</td>
-          <td class="action-text">{action}</td>
-          <td><span class="badge {tag_cls}">{e_tag}</span></td>
-          <td class="owner-cell placeholder">&#9998; Assign</td>
+          <td style="text-align:center;">
+            <span style="display:inline-block;padding:2px 8px;border-radius:99px;
+              font-size:10px;font-weight:700;background:{bg};color:{clr};">{pri_label}</span>
+          </td>
+          <td class="action-text">{text}</td>
+          <td><span class="badge {badge_cls}">{e_tag}</span></td>
+          <td class="owner-cell">{owner}</td>
           <td class="due-cell">{due}</td>
         </tr>'''
 
