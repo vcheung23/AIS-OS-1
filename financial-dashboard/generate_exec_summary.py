@@ -1013,8 +1013,8 @@ def main():
     if args.ar_json and os.path.exists(args.ar_json):
         ar_aging = json.load(open(args.ar_json, encoding='utf-8'))
 
-    netlify_site_id = os.environ.get('NETLIFY_SITE_ID', '37857454-971d-4b82-a354-6716bbdbfc1e')
-    netlify_token   = os.environ.get('NETLIFY_TOKEN', 'nfp_Wd38fqMn6XhaP4MHHiwqqySfPEq39v8k5d79')
+    netlify_site_id = os.environ.get('NETLIFY_SITE_ID', '')
+    netlify_token   = os.environ.get('NETLIFY_TOKEN', '')
 
     # Determine archive filename for this month
     month_slug   = f'{args.month.lower()}-{args.year}'   # e.g. june-2026
