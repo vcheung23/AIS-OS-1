@@ -90,6 +90,44 @@ def section_total(section, col_idx):
             return 0
     return 0
 
+def overlay_own_month_snapshots(ttm_data, entities, qb_dir, qb_files):
+    """
+    Replace each month's revenue in the TTM series with that month's OWN QuickBooks
+    snapshot — the TTM file pulled the month it closed — when one is on disk.
+
+    Why: the current-month TTM export reflects QB post-close revisions to earlier
+    months (e.g. a lumpy annual fee later reversed or re-dated), so reading the whole
+    12-month series off that one file disagrees with the MoM flags, which compare each
+    month against its own as-closed snapshot. Each qb_<month>_<year> folder holds the
+    as-closed pull for its own month — the same source the flags trust — so overlaying
+    them keeps the chart and the flags telling one story.
+
+    A month is left untouched when its own snapshot folder/file is absent (older months
+    predating the local pipeline keep the current-TTM value).
+    """
+    if not qb_dir:
+        return ttm_data
+    from calendar import month_abbr, month_name
+    abbr_to_full = {month_abbr[i]: month_name[i].lower() for i in range(1, 13)}
+    parent = os.path.dirname(os.path.abspath(qb_dir))
+    for e in entities:
+        for label in list(ttm_data.get(e, {}).keys()):
+            parts = label.split()
+            if len(parts) != 2 or parts[0] not in abbr_to_full:
+                continue
+            path = os.path.join(parent, f'qb_{abbr_to_full[parts[0]]}_{parts[1]}', qb_files[e])
+            report = load_qb_report(path)          # None if the file is missing
+            if report is None:
+                continue
+            cidx = get_col_index(report, label)
+            if cidx is None:
+                continue
+            income = get_section(report, ['Income', 'Revenue'])
+            if income is None:
+                continue
+            ttm_data[e][label] = round(section_total(income, cidx), 2)
+    return ttm_data
+
 def top_movers(section, may_idx, jun_idx, n=3, direction='down'):
     if not section:
         return []
@@ -416,6 +454,12 @@ def build_ttm_section(ttm_data, entities, entity_labels, entity_dots, month, yea
     </div>
     <div style="padding:12px 18px 16px;border-top:1px solid #f8fafc;">
       <ul style="list-style:none;margin:0;padding:0;">{bullets_html}</ul>
+    </div>
+    <div style="padding:0 18px 14px;font-size:11px;color:#94a3b8;line-height:1.5;">
+      Each month reflects its own QuickBooks close (as reported on the 15th of the
+      following month). Later QB revisions are not applied, so a figure here can differ
+      from a current TTM export — this keeps the chart consistent with the
+      month-over-month flags above.
     </div>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -816,6 +860,24 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
     # ── TTM chart ──
     ttm_data = data.get('ttm_monthly_income', {})
     if ttm_data and all(e in ttm_data for e in entities):
+        # Rebuild the series from each month's own QuickBooks close so the chart
+        # agrees with the MoM flags. The current-month TTM export carries QB
+        # post-close revisions to prior months, which otherwise hides real MoM
+        # moves (see overlay_own_month_snapshots).
+        #
+        # Step 1 (best-effort, local): where per-month QB snapshot folders are on
+        # disk, use each month's own close for the whole series.
+        ttm_data = overlay_own_month_snapshots(ttm_data, entities, qb_dir, qb_files)
+        # Step 2 (guaranteed, incl. cloud runs with no snapshot history on disk):
+        # force the current + prior month bars to the exact revenue the flags use.
+        # `data`/`prior_data` are always passed to this generator, so this can never
+        # silently no-op — the chart's two most-recent bars always match the flags.
+        # (jun_label/may_label are the current/prior month labels, computed above.)
+        for e in entities:
+            if jun_label in ttm_data[e]:
+                ttm_data[e][jun_label] = round(mp[e]['total_revenue'], 2)
+            if may_label in ttm_data[e]:
+                ttm_data[e][may_label] = round(mp_prior[e]['total_revenue'], 2)
         ttm_section_html = build_ttm_section(
             ttm_data, entities, entity_labels, entity_dots, month, year
         )
