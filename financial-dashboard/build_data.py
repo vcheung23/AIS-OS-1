@@ -219,49 +219,70 @@ def ytd_col_labels(month_name, year):
 
 # ── Labor cost extraction ───────────────────────────────────────────────────────
 
-LABOR_PATTERNS = {
-    'GOPM': ['PM - VA', 'GOPM contractor', 'VA / GOPM'],
-    'PSB':  ['PSB - VA', 'PSB VA'],
-    'PPB':  ['PPB - VA', 'PPB VA'],
-}
-MGMT_PATTERNS = ['Management', 'Wages', 'Mgmt Fee', 'Officer']
+def _find_section(rows, needle):
+    """Recursively find the first Section whose Header name contains needle."""
+    for row in rows:
+        if row.get('type') == 'Section':
+            hdr = row.get('Header', {}).get('ColData', [{}])
+            title = hdr[0].get('value', '') if hdr else ''
+            if needle.lower() in title.lower():
+                return row
+            sub = _find_section(row.get('Rows', {}).get('Row', []), needle)
+            if sub is not None:
+                return sub
+    return None
+
+def _ytd_section_total(report, needle, col_labels):
+    """Sum a section's Summary total (captures header-posted + child amounts) across YTD columns."""
+    total = 0.0
+    for label in col_labels:
+        cidx = col_idx(report, label)
+        if cidx is None:
+            continue
+        total += section_total(_find_section(report.get('Rows', {}).get('Row', []), needle), cidx)
+    return total
+
+def _ytd_lines(report, needle, col_labels):
+    """Sum all Data leaf lines matching needle across YTD columns."""
+    total = 0.0
+    for label in col_labels:
+        cidx = col_idx(report, label)
+        if cidx is None:
+            continue
+        total += find_lines_matching(report, needle, cidx)
+    return total
 
 def extract_ytd_labor(reports, col_labels):
     """
-    Return labor_cost.salaries dict summed across YTD months.
-    GOPM direct labor = sum across GOPM Expenses for VA/contractor lines.
-    PSB/PPB direct labor = similar.
-    Management = GOPM Expenses management/wages lines.
+    labor_cost.salaries under the **Labor + Mgmt Load** definition (YTD), read
+    from the TTM P&L files. Includes wages + payroll tax + employee benefits +
+    contractors + intercompany management fees; EXCLUDES COGS subcontractors
+    (true COGS). Matched to the actual QB account structure per entity (account
+    numbers are stable), so the KPI reconciles to the P&Ls month over month —
+    unlike the old fuzzy name-match, which used line names that don't exist
+    (e.g. 'PSB - VA') and silently under/over-counted.
+
+    Keeps the 'PM - VA / GOPM contractors' key: the VA-labor flag and
+    build_analytics both read it. Feeds generate_exec_summary 'YTD Labor + Mgmt
+    Load' (target band 30-40%).
     """
+    g, p, b = reports['GOPM'], reports['PSB'], reports['PPB']
+    ST = lambda rep, needle: _ytd_section_total(rep, needle, col_labels)
+    LN = lambda rep, needle: _ytd_lines(rep, needle, col_labels)
+
     salaries = {
-        'PM - VA / GOPM contractors': 0.0,
-        'PSB - VA':                   0.0,
-        'PPB - VA':                   0.0,
-        'Management (Wages + Mgmt Fees, YTD)': 0.0
+        # GOPM
+        'PM - VA / GOPM contractors':          ST(g, 'Direct Labor'),                       # 105305/6/7 (VA flag reads this)
+        'GOPM management payroll (wages+tax)':  ST(g, '107390'),                             # mgmt wages + ER tax + processing
+        'GOPM COGS labor':                      LN(g, '107450') + LN(g, '105329') + LN(g, '105330'),  # HOA wages + cost of labor
+        'GOPM benefits/insurance':              ST(g, 'Payroll Tax & Benefits'),             # health/STD/workers comp
+        # PSB (no W2 wages; subcontractors sit in COGS and are excluded)
+        'PSB - VA / contractors':               ST(p, '707300') + LN(p, '705305'),           # payroll proc/officers + admin/acct contractors
+        # PPB
+        'PPB payroll + contractors':            ST(b, 'Payroll') + LN(b, '805305'),          # payroll + contractors
+        # Owner comp booked as intercompany management fees
+        'Intercompany management fees':         LN(g, '107405') + LN(p, '707407'),
     }
-
-    for label in col_labels:
-        # GOPM VA/contractors
-        cidx = col_idx(reports['GOPM'], label)
-        if cidx:
-            for p in LABOR_PATTERNS['GOPM']:
-                salaries['PM - VA / GOPM contractors'] += find_lines_matching(reports['GOPM'], p, cidx)
-            for p in MGMT_PATTERNS:
-                salaries['Management (Wages + Mgmt Fees, YTD)'] += find_lines_matching(reports['GOPM'], p, cidx)
-
-        # PSB VA
-        cidx = col_idx(reports['PSB'], label)
-        if cidx:
-            for p in LABOR_PATTERNS['PSB']:
-                salaries['PSB - VA'] += find_lines_matching(reports['PSB'], p, cidx)
-
-        # PPB VA
-        cidx = col_idx(reports['PPB'], label)
-        if cidx:
-            for p in LABOR_PATTERNS['PPB']:
-                salaries['PPB - VA'] += find_lines_matching(reports['PPB'], p, cidx)
-
-    # Remove zero entries if nothing found (avoid false zeros)
     return {k: round(v, 2) for k, v in salaries.items()}
 
 
