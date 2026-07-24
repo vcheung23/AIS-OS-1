@@ -688,6 +688,21 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
                         f'the oldest bucket first, and target 50% collected by '
                         f'{due_red if _hi else due_amber}.'})
 
+    # Labor + Mgmt Load is a portfolio KPI card (not a per-entity banner). When it
+    # runs red (over the flat 30% target) it must produce its own action, or a red
+    # card would sit on the page with nothing to remedy it — same FLAGS == ACTIONS
+    # rule as everything above.
+    if salary_color == 'red':
+        _target_salary = ytd_rev * 0.30
+        _over          = total_salary - _target_salary
+        _hi            = salary_pct > 35
+        actions.append({
+            'priority': 'high' if _hi else 'med', 'entity': 'Portfolio', 'owner': OWNER,
+            'text': f'Labor + mgmt load at {fmt_pct(salary_pct)} of revenue vs. 30% target '
+                    f'({fmt_dollar(_over)} over) — audit the VA/contractor roster for '
+                    f'consolidation and review the intercompany mgmt-fee draw, then set a '
+                    f'plan to bring the ratio to 30% by {due_red if _hi else due_amber}.'})
+
     # High priority first, stable within priority.
     _pri_rank = {'high': 0, 'med': 1, 'low': 2}
     actions.sort(key=lambda a: _pri_rank.get(a.get('priority', 'med'), 1))
