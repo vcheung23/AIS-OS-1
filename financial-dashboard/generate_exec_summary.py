@@ -977,6 +977,72 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
 
     ytd_window = f"Jan–{month} {year}"
 
+    # ── Revenue Concentration (YTD) ──
+    # Structural risk view: how much of each entity's YTD revenue rides on its
+    # single largest service line. Visibility-only — deliberately NOT wired into
+    # the MoM flag/action engine (it is a standing risk, not a monthly change),
+    # so the "flags == actions" invariant still counts only banners + A/R.
+    rev_mix = data.get('revenue_mix', {})
+    conc_section_html = ''
+    if rev_mix:
+        seg_colors = ['#2563eb', '#16a34a', '#d97706', '#8b5cf6', '#64748b']
+        panels = ''
+        for e in entities:
+            em = rev_mix.get(e)
+            if not em or not em.get('lines'):
+                continue
+            lines = sorted(em['lines'], key=lambda x: x[1], reverse=True)
+            total = em.get('total') or sum(v for _, v in lines)
+            if total <= 0:
+                continue
+            top_name, top_val = lines[0]
+            top_share  = top_val / total * 100
+            top3_share = sum(v for _, v in lines[:3]) / total * 100
+            if top_share > 60:
+                b_cls, b_lbl = 'red', 'CONCENTRATED'
+            elif top_share >= 40:
+                b_cls, b_lbl = 'amber', 'WATCH'
+            else:
+                b_cls, b_lbl = 'green', 'DIVERSIFIED'
+            shown = lines[:4]
+            segs = ''
+            for idx, (nm, v) in enumerate(shown):
+                w = v / total * 100
+                segs += (f'<div title="{nm}: {fmt_dollar(v)} ({w:.0f}%)" '
+                         f'style="width:{w:.2f}%;background:{seg_colors[idx]};"></div>')
+            rem = total - sum(v for _, v in shown)
+            if rem > 0.5:
+                rw = rem / total * 100
+                segs += (f'<div title="Other lines: {fmt_dollar(rem)} ({rw:.0f}%)" '
+                         f'style="width:{rw:.2f}%;background:{seg_colors[4]};"></div>')
+            legend = ''
+            for idx, (nm, v) in enumerate(lines[:3]):
+                legend += (f'<div style="display:flex;align-items:center;gap:6px;'
+                           f'font-size:11px;color:#475569;margin-top:4px;">'
+                           f'<span style="width:8px;height:8px;border-radius:2px;'
+                           f'background:{seg_colors[idx]};flex-shrink:0;"></span>'
+                           f'<span style="flex:1;">{nm}</span>'
+                           f'<span style="font-weight:600;color:#0f172a;">{fmt_dollar(v)} &middot; {v/total*100:.0f}%</span></div>')
+            panels += f'''
+      <div style="background:white;border-radius:10px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <span style="font-weight:600;font-size:13px;color:#0f172a;"><span class="dot" style="background:{entity_dots[e]}"></span>{entity_labels[e]}</span>
+          <span class="badge {b_cls}">{b_lbl}</span>
+        </div>
+        <div style="font-size:26px;font-weight:700;color:#0f172a;line-height:1;">{top_share:.0f}%</div>
+        <div style="font-size:11px;color:#64748b;margin:3px 0 12px;">from <strong>{top_name}</strong> &nbsp;&middot;&nbsp; top 3 lines = {top3_share:.0f}%</div>
+        <div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:#f1f5f9;">{segs}</div>
+        {legend}
+      </div>'''
+        if panels:
+            conc_section_html = f'''
+  <div>
+    <div class="section-title">Revenue Concentration &mdash; YTD ({ytd_window})</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;">{panels}
+    </div>
+    <div style="font-size:11px;color:#94a3b8;margin-top:8px;">Share of each entity's YTD revenue from its single largest service line. &gt;60% = concentrated (single-line dependency); 40&ndash;60% = watch. Hover a bar for line detail.</div>
+  </div>'''
+
     month_options_html = ''.join(
         f'<option value="{m["url"]}">{m["label"]}</option>'
         for m in (prev_months or [])
@@ -1109,6 +1175,8 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
   </div>
 
   {ttm_section_html}
+
+  {conc_section_html}
 
   {ar_section_html}
 
