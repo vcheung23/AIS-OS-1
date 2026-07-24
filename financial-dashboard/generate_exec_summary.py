@@ -570,12 +570,12 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
     salary_pct    = total_salary / ytd_rev * 100 if ytd_rev else 0
     prior_ytd_rev = sum(prior_data['gm_per_entity'][e]['total_revenue'] for e in entities)
     prior_salary_pct = prior_salary / prior_ytd_rev * 100 if prior_ytd_rev else 0
-    # Band widened to 30–40% because this measure now includes ~$180K of
+    # Single target of 30% of revenue (per Victor). At/under target is on track;
+    # anything over reads High — review. This measure includes ~$180K of
     # intercompany management fees (owner comp) on top of wages/tax/benefits/
-    # contractors — the mgmt-fee inclusion adds ~8pp vs. a labor-only ratio.
-    salary_verdict = ('On track' if 30 <= salary_pct <= 40
-                      else ('High — review' if salary_pct > 40 else 'Below benchmark'))
-    salary_color  = 'green' if 30 <= salary_pct <= 40 else 'red'
+    # contractors, so it runs ~8pp above a labor-only ratio.
+    salary_verdict = 'On track' if salary_pct <= 30 else 'High — review'
+    salary_color  = 'green' if salary_pct <= 30 else 'red'
 
     # Current month combined
     month_rev_cur   = sum(mp[e]['total_revenue']  for e in entities)
@@ -1197,7 +1197,7 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
       <div class="kpi-card {salary_color}">
         <div class="val">{fmt_pct(salary_pct)}</div>
         <div class="name">YTD Labor + Mgmt Load</div>
-        <div class="sub">Wages, tax, benefits, contractors &amp; mgmt fees &nbsp;&middot;&nbsp; Target 30&ndash;40% &nbsp;&middot;&nbsp; {salary_verdict} &nbsp;&middot;&nbsp; was {fmt_pct(prior_salary_pct)} end of {may_label}</div>
+        <div class="sub">Wages, tax, benefits, contractors &amp; mgmt fees &nbsp;&middot;&nbsp; Target 30% &nbsp;&middot;&nbsp; {salary_verdict} &nbsp;&middot;&nbsp; was {fmt_pct(prior_salary_pct)} end of {may_label}</div>
       </div>
       <div class="kpi-card {'red' if month_rev_mom < -20 else ('amber' if month_rev_mom < 0 else 'green')}">
         <div class="val">{fmt_dollar(month_rev_cur)}</div>
