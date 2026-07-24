@@ -600,49 +600,100 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
     eoy = {e: gm[e]['total_revenue'] * 12 / months_elapsed for e in entities}
     eoy_total = sum(eoy.values())
 
-    # Actions — normalize to dicts, prepend MoM-driven actions
-    raw_actions = an.get('actions', [])
-    def _norm_action(a):
-        if isinstance(a, dict):
-            return a
-        e = 'GOPM' if 'GOPM' in a else ('PSB' if 'PSB' in a else ('PPB' if 'PPB' in a else 'Portfolio'))
-        return {'text': a, 'entity': e, 'priority': 'med', 'owner': '—'}
-
-    base_actions = [_norm_action(a) for a in raw_actions]
-
-    # Prepend MoM revenue actions for any entity with a significant move
-    mom_actions = []
-    for e in entities:
-        rm = rev_moms[e]
-        cur_rev  = mp[e]['total_revenue']
-        pri_rev  = mp_prior[e]['total_revenue']
-        delta    = cur_rev - pri_rev
-        if rm <= -30:
-            mom_actions.append({
-                'text':   f'{e} revenue {rm:+.0f}% MoM (${cur_rev:,.0f} vs ${pri_rev:,.0f}, '
-                          f'${abs(delta):,.0f} drop) — identify the specific line items that fell '
-                          f'and confirm whether this is a timing shift or a lost account.',
-                'entity': e, 'priority': 'high', 'owner': 'Victor'
-            })
-        elif -30 < rm <= -15:
-            mom_actions.append({
-                'text':   f'{e} revenue {rm:+.0f}% MoM (${cur_rev:,.0f} vs ${pri_rev:,.0f}) — '
-                          f'review top revenue lines for the drop and flag any at-risk accounts.',
-                'entity': e, 'priority': 'med', 'owner': 'Victor'
-            })
-        elif rm >= 20:
-            mom_actions.append({
-                'text':   f'{e} revenue {rm:+.0f}% MoM (${cur_rev:,.0f} vs ${pri_rev:,.0f}) — '
-                          f'confirm this is sustainable or a one-time event before projecting forward.',
-                'entity': e, 'priority': 'low', 'owner': 'Victor'
-            })
-
-    # Merge: MoM actions first, then base (deduplicated by entity+priority)
-    actions = (mom_actions + base_actions)[:7]
-
     # Due dates
     due_red   = (report_date + timedelta(days=15)).strftime('%b %d')
     due_amber = (report_date + timedelta(days=30)).strftime('%b %d')
+
+    # ── Action items — derived 1:1 from the SAME flags the banners raise ──
+    # Golden invariant (sibling to "chart == flags"): FLAGS == ACTIONS. Every
+    # red/amber signal — loss month, revenue drop, margin compression, VA-labor,
+    # and A/R aging — produces exactly one CEO-grade action carrying an owner, a
+    # dollar figure, and a decision/deadline. There is deliberately NO static
+    # list: if this month's data didn't flag it, it isn't an action. (The old
+    # build read data['analytics']['actions'], a hardcoded list that surfaced
+    # stale items like "replace snow revenue by May" and, worse, let the A/R
+    # collection flag fall off the list entirely — that's the bug this fixes.)
+    OWNER = 'Victor'   # COO owns P&L / ops; reassign here if an action needs a different owner
+
+    def _flag_action(e, alert):
+        atype = alert[0]
+        label = entity_labels[e]
+        rev   = mp[e]['total_revenue']
+        rev_p = mp_prior[e]['total_revenue']
+        delta = rev - rev_p
+        ni    = mp[e]['net_income']
+        ni_pct = (ni / rev * 100) if rev else 0
+        if atype == 'loss_month':
+            return {'priority': 'high', 'entity': e, 'owner': OWNER,
+                'text': f'{label} posted a loss month (net income {fmt_dollar(ni)}, '
+                        f'{fmt_pct(ni_pct)} margin) — walk the {month} COGS and job costs to find '
+                        f'the overrun, and decide by {due_red} whether it is a one-time job or a '
+                        f'pricing problem.'}
+        if atype == 'rev_drop_red':
+            return {'priority': 'high', 'entity': e, 'owner': OWNER,
+                'text': f'{label} revenue {rev_moms[e]:+.0f}% MoM ({fmt_dollar(rev_p)} → '
+                        f'{fmt_dollar(rev)}, {fmt_dollar(abs(delta))} drop) — identify the '
+                        f'specific line items that fell and confirm timing shift vs. lost account '
+                        f'by {due_red}.'}
+        if atype == 'rev_drop_amber':
+            return {'priority': 'med', 'entity': e, 'owner': OWNER,
+                'text': f'{label} revenue {rev_moms[e]:+.0f}% MoM ({fmt_dollar(rev_p)} → '
+                        f'{fmt_dollar(rev)}) — review the top revenue lines for the drop and flag '
+                        f'any at-risk accounts by {due_amber}.'}
+        if atype == 'margin_compress':
+            return {'priority': 'med', 'entity': e, 'owner': OWNER,
+                'text': f'{label} net margin compressed {alert[1]:.0f}pp MoM — pin the COGS '
+                        f'driver, confirm it reverses next month, and escalate to CEO by '
+                        f'{due_amber} if it holds.'}
+        if atype == 'va_labor':
+            return {'priority': 'med', 'entity': e, 'owner': OWNER,
+                'text': f'{label} admin/VA labor at {fmt_pct(alert[1])} of revenue (benchmark '
+                        f'5–12%) — audit the contractor roster for automation/consolidation and '
+                        f'target under 12% by {due_amber}.'}
+        return None
+
+    actions = []
+    # Red flags first, then amber — matching the banner order, entity by entity.
+    for e in entities:
+        _, _, alert_list = statuses[e]
+        for alert in alert_list:
+            a = _flag_action(e, alert)
+            if a:
+                actions.append(a)
+
+    # A/R aging is flagged on its own card — give it a matching action so a
+    # collection item can never silently fall off the list again.
+    if ar_aging:
+        _cur  = ar_aging.get('current', 0)
+        _n30  = ar_aging.get('net30', 0)
+        _n30p = ar_aging.get('net30plus', 0)
+        _tot  = _cur + _n30 + _n30p
+        _pct  = (_n30p / _tot * 100) if _tot else 0
+        if _n30p > 0 and _pct > 20:
+            _ar_e  = ar_aging.get('entity', 'Pro Services Boston')
+            _e_tag = ('PSB'  if ('Boston' in _ar_e or 'PSB' in _ar_e)
+                      else 'GOPM' if ('Green' in _ar_e or 'GOPM' in _ar_e)
+                      else 'PPB'  if ('Profitable' in _ar_e or 'PPB' in _ar_e)
+                      else 'Portfolio')
+            _note   = ar_aging.get('note', '').strip()
+            _note_s = f' — {_note}' if _note else ''
+            _hi     = _pct > 40
+            actions.append({
+                'priority': 'high' if _hi else 'med', 'entity': _e_tag, 'owner': OWNER,
+                'text': f'{_ar_e}: {fmt_dollar(_n30p)} of A/R is 31+ days past due '
+                        f'({fmt_pct(_pct)} of total A/R){_note_s}. Assign collection calls, clear '
+                        f'the oldest bucket first, and target 50% collected by '
+                        f'{due_red if _hi else due_amber}.'})
+
+    # High priority first, stable within priority.
+    _pri_rank = {'high': 0, 'med': 1, 'low': 2}
+    actions.sort(key=lambda a: _pri_rank.get(a.get('priority', 'med'), 1))
+
+    # Never hand the CEO an empty action table.
+    if not actions:
+        actions = [{'priority': 'low', 'entity': 'Portfolio', 'owner': OWNER,
+                    'text': f'No red or amber flags in {month} — portfolio on plan. Maintain '
+                            f'course and revisit at next close.'}]
 
     # ── WHY analysis from QB TTM files ──
     why_rev    = {}   # revenue-only bullets
@@ -837,7 +888,7 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
     entity_badge_cls = {'GOPM': 'neutral', 'PSB': 'green', 'PPB': 'amber', 'Portfolio': 'green'}
 
     action_rows = ""
-    for i, action in enumerate(actions[:7], 1):
+    for i, action in enumerate(actions[:10], 1):
         pri      = action.get('priority', 'med')
         e_tag    = action.get('entity', 'Portfolio')
         owner    = action.get('owner', '—')
