@@ -525,7 +525,7 @@ def rag_status(entity, mp_cur, mp_prior, gopm_va_pct=None):
 
 # ── HTML generation ───────────────────────────────────────────────────────────
 
-def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior_qb_dir=None, ar_aging=None, prev_months=None):
+def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior_qb_dir=None, ar_aging=None, prev_months=None, top_customers=None):
     gm = data['gm_per_entity']
     mp = data['month_pnl']
     mp_prior = prior_data['month_pnl']
@@ -1043,6 +1043,49 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
     <div style="font-size:11px;color:#94a3b8;margin-top:8px;">Share of each entity's YTD revenue from its single largest service line. &gt;60% = concentrated (single-line dependency); 40&ndash;60% = watch. Hover a bar for line detail.</div>
   </div>'''
 
+    # ── Top Customers (YTD) ──
+    # Per-bucket top-5 clients. GOPM is split Investment vs HOA and sourced from
+    # Buildium's per-client management-fee (acct 6090) because GOPM's mgmt fees
+    # are billed in Buildium, not customer-tagged in QBO (QBO customer-sales sees
+    # only ~15% of GOPM revenue). PSB is sourced from QBO customer-sales, which
+    # ≈ revenue there. Shares are % of each bucket's own pool. Data comes from a
+    # --customers-json file (like --ar-json); refresh it monthly.
+    customers_section_html = ''
+    if top_customers and top_customers.get('buckets'):
+        entity_badge = {'GOPM': 'neutral', 'PSB': 'green', 'PPB': 'amber', 'Portfolio': 'green'}
+        cpanels = ''
+        for b in top_customers['buckets']:
+            ent = b.get('entity', 'Portfolio')
+            rows = ''
+            for i, c in enumerate(b.get('customers', [])[:5], 1):
+                pct = c.get('pct')
+                pct_s = f'{pct:.1f}%' if isinstance(pct, (int, float)) else ''
+                rows += (f'<div style="display:flex;align-items:baseline;gap:8px;font-size:12px;'
+                         f'padding:5px 0;border-top:1px solid #f1f5f9;">'
+                         f'<span style="color:#94a3b8;font-weight:700;width:14px;">{i}</span>'
+                         f'<span style="flex:1;color:#0f172a;">{c.get("name","")}</span>'
+                         f'<span style="font-weight:600;color:#0f172a;white-space:nowrap;">{fmt_dollar(c.get("value",0))}</span>'
+                         f'<span style="color:#64748b;width:44px;text-align:right;">{pct_s}</span>'
+                         f'</div>')
+            cpanels += f'''
+      <div style="background:white;border-radius:10px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
+          <span style="font-weight:600;font-size:13px;color:#0f172a;">{b.get("label","")}</span>
+          <span class="badge {entity_badge.get(ent, 'green')}">{ent}</span>
+        </div>
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">{b.get("sublabel","")}</div>
+        {rows}
+      </div>'''
+        foot = top_customers.get('footnote', '')
+        win  = top_customers.get('window', ytd_window)
+        customers_section_html = f'''
+  <div>
+    <div class="section-title">Top Customers &mdash; {win}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;">{cpanels}
+    </div>
+    {f'<div style="font-size:11px;color:#94a3b8;margin-top:8px;">{foot}</div>' if foot else ''}
+  </div>'''
+
     month_options_html = ''.join(
         f'<option value="{m["url"]}">{m["label"]}</option>'
         for m in (prev_months or [])
@@ -1178,6 +1221,8 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
 
   {conc_section_html}
 
+  {customers_section_html}
+
   {ar_section_html}
 
   <div class="two-col">
@@ -1227,6 +1272,8 @@ def main():
                         help='Folder with prior month TTM files — enables cross-report revenue analysis')
     parser.add_argument('--ar-json',      default=None,
                         help='JSON file with AR aging: {current, net30, net30plus, entity, as_of, note}')
+    parser.add_argument('--customers-json', default=None,
+                        help='JSON file with top customers by bucket: {window, buckets:[{label,entity,sublabel,customers:[{name,value,pct}]}], footnote}')
     parser.add_argument('--output',       required=True)
     parser.add_argument('--month',        required=True)
     parser.add_argument('--year',         required=True, type=int)
@@ -1242,6 +1289,10 @@ def main():
     ar_aging = None
     if args.ar_json and os.path.exists(args.ar_json):
         ar_aging = json.load(open(args.ar_json, encoding='utf-8'))
+
+    top_customers = None
+    if args.customers_json and os.path.exists(args.customers_json):
+        top_customers = json.load(open(args.customers_json, encoding='utf-8'))
 
     netlify_site_id = os.environ.get('NETLIFY_SITE_ID', '')
     netlify_token   = os.environ.get('NETLIFY_TOKEN', '')
@@ -1274,7 +1325,8 @@ def main():
                          report_date, qb_dir=args.qb_dir,
                          prior_qb_dir=args.prior_qb_dir,
                          ar_aging=ar_aging,
-                         prev_months=prev_months)
+                         prev_months=prev_months,
+                         top_customers=top_customers)
 
     with open(args.output, 'w', encoding='utf-8') as f:
         f.write(html)
