@@ -616,10 +616,19 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
     # build read data['analytics']['actions'], a hardcoded list that surfaced
     # stale items like "replace snow revenue by May" and, worse, let the A/R
     # collection flag fall off the list entirely — that's the bug this fixes.)
-    OWNER = 'Victor'   # COO owns P&L / ops; reassign here if an action needs a different owner
+    # Per-flag owner — each action is assigned to who is actually responsible,
+    # mirroring the owners on the matching Operations Follow-up Asana tasks and the
+    # GOPM accountability chart. Finance owner is ENTITY-SPECIFIC per that chart:
+    # GOPM = Ivee (IU Finance Mgr), PSB = Hazel (PSB Finance Mgr), PPB = Mira
+    # (Controller), Portfolio-level = Victor (COO). Victor also owns cost, margin,
+    # staffing and pricing across all entities.
+    OWNER_OPS     = 'Victor'
+    FINANCE_OWNER = {'GOPM': 'Ivee', 'PSB': 'Hazel', 'PPB': 'Mirasol', 'Portfolio': 'Victor'}
+    _FINANCE_ATYPES = {'rev_drop_red', 'rev_drop_amber'}   # billing / revenue-timing = finance
 
     def _flag_action(e, alert):
         atype = alert[0]
+        owner = FINANCE_OWNER.get(e, 'Mirasol') if atype in _FINANCE_ATYPES else OWNER_OPS
         label = entity_labels[e]
         rev   = mp[e]['total_revenue']
         rev_p = mp_prior[e]['total_revenue']
@@ -627,29 +636,29 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
         ni    = mp[e]['net_income']
         ni_pct = (ni / rev * 100) if rev else 0
         if atype == 'loss_month':
-            return {'priority': 'high', 'entity': e, 'owner': OWNER,
+            return {'priority': 'high', 'entity': e, 'owner': owner,
                 'text': f'{label} posted a loss month (net income {fmt_dollar(ni)}, '
                         f'{fmt_pct(ni_pct)} margin) — walk the {month} COGS and job costs to find '
                         f'the overrun, and decide by {due_red} whether it is a one-time job or a '
                         f'pricing problem.'}
         if atype == 'rev_drop_red':
-            return {'priority': 'high', 'entity': e, 'owner': OWNER,
+            return {'priority': 'high', 'entity': e, 'owner': owner,
                 'text': f'{label} revenue {rev_moms[e]:+.0f}% MoM ({fmt_dollar(rev_p)} → '
                         f'{fmt_dollar(rev)}, {fmt_dollar(abs(delta))} drop) — identify the '
                         f'specific line items that fell and confirm timing shift vs. lost account '
                         f'by {due_red}.'}
         if atype == 'rev_drop_amber':
-            return {'priority': 'med', 'entity': e, 'owner': OWNER,
+            return {'priority': 'med', 'entity': e, 'owner': owner,
                 'text': f'{label} revenue {rev_moms[e]:+.0f}% MoM ({fmt_dollar(rev_p)} → '
                         f'{fmt_dollar(rev)}) — review the top revenue lines for the drop and flag '
                         f'any at-risk accounts by {due_amber}.'}
         if atype == 'margin_compress':
-            return {'priority': 'med', 'entity': e, 'owner': OWNER,
+            return {'priority': 'med', 'entity': e, 'owner': owner,
                 'text': f'{label} net margin compressed {alert[1]:.0f}pp MoM — pin the COGS '
                         f'driver, confirm it reverses next month, and escalate to CEO by '
                         f'{due_amber} if it holds.'}
         if atype == 'va_labor':
-            return {'priority': 'med', 'entity': e, 'owner': OWNER,
+            return {'priority': 'med', 'entity': e, 'owner': owner,
                 'text': f'{label} admin/VA labor at {fmt_pct(alert[1])} of revenue (benchmark '
                         f'5–12%) — audit the contractor roster for automation/consolidation and '
                         f'target under 12% by {due_amber}.'}
@@ -682,7 +691,8 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
             _note_s = f' — {_note}' if _note else ''
             _hi     = _pct > 40
             actions.append({
-                'priority': 'high' if _hi else 'med', 'entity': _e_tag, 'owner': OWNER,
+                'priority': 'high' if _hi else 'med', 'entity': _e_tag,
+                'owner': FINANCE_OWNER.get(_e_tag, 'Mirasol'),
                 'text': f'{_ar_e}: {fmt_dollar(_n30p)} of A/R is 31+ days past due '
                         f'({fmt_pct(_pct)} of total A/R){_note_s}. Assign collection calls, clear '
                         f'the oldest bucket first, and target 50% collected by '
@@ -697,7 +707,7 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
         _over          = total_salary - _target_salary
         _hi            = salary_pct > 35
         actions.append({
-            'priority': 'high' if _hi else 'med', 'entity': 'Portfolio', 'owner': OWNER,
+            'priority': 'high' if _hi else 'med', 'entity': 'Portfolio', 'owner': OWNER_OPS,
             'text': f'Labor + mgmt load at {fmt_pct(salary_pct)} of revenue vs. 30% target '
                     f'({fmt_dollar(_over)} over) — audit the VA/contractor roster for '
                     f'consolidation and review the intercompany mgmt-fee draw, then set a '
@@ -709,7 +719,7 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
 
     # Never hand the CEO an empty action table.
     if not actions:
-        actions = [{'priority': 'low', 'entity': 'Portfolio', 'owner': OWNER,
+        actions = [{'priority': 'low', 'entity': 'Portfolio', 'owner': OWNER_OPS,
                     'text': f'No red or amber flags in {month} — portfolio on plan. Maintain '
                             f'course and revisit at next close.'}]
 
@@ -1259,7 +1269,13 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
   </div>
 
   <div class="card">
-    <div class="card-header">Action Items This Month</div>
+    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+      <span>Action Items This Month</span>
+      <a href="https://app.asana.com/1/454570643008941/project/1216927436529253"
+         target="_blank" rel="noopener"
+         style="font-size:12px;font-weight:600;color:#0ea5e9;text-decoration:none;white-space:nowrap;">
+        Track in Operations Follow-up &#8599;</a>
+    </div>
     <table>
       <thead><tr><th>#</th><th>Action</th><th>Entity</th><th>Owner</th><th>Due</th></tr></thead>
       <tbody>{action_rows}</tbody>
