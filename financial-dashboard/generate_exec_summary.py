@@ -525,7 +525,7 @@ def rag_status(entity, mp_cur, mp_prior, gopm_va_pct=None):
 
 # ── HTML generation ───────────────────────────────────────────────────────────
 
-def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior_qb_dir=None, ar_aging=None, prev_months=None, top_customers=None):
+def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior_qb_dir=None, ar_aging=None, prev_months=None, top_customers=None, actions_json=None):
     gm = data['gm_per_entity']
     mp = data['month_pnl']
     mp_prior = prior_data['month_pnl']
@@ -722,6 +722,25 @@ def generate_html(data, prior_data, month, year, report_date, qb_dir=None, prior
         actions = [{'priority': 'low', 'entity': 'Portfolio', 'owner': OWNER_OPS,
                     'text': f'No red or amber flags in {month} — portfolio on plan. Maintain '
                             f'course and revisit at next close.'}]
+
+    # Emit structured action items so downstream automation (the monthly routine's
+    # Operations Follow-up task creator) can turn each into an owned Asana task.
+    # Owners here already match the accountability chart, and due_on mirrors the
+    # priority→date mapping used to render the table (high = +15d, else +30d).
+    if actions_json:
+        _due_iso = {'high': (report_date + timedelta(days=15)).strftime('%Y-%m-%d'),
+                    'med':  (report_date + timedelta(days=30)).strftime('%Y-%m-%d'),
+                    'low':  (report_date + timedelta(days=30)).strftime('%Y-%m-%d')}
+        _payload = {'month': month, 'year': year,
+                    'generated': report_date.strftime('%Y-%m-%d'),
+                    'actions': [{'priority': a.get('priority', 'med'),
+                                 'entity':   a.get('entity', 'Portfolio'),
+                                 'owner':    a.get('owner', 'Victor'),
+                                 'due_on':   _due_iso.get(a.get('priority', 'med'), _due_iso['med']),
+                                 'text':     a.get('text', '')} for a in actions[:10]]}
+        with open(actions_json, 'w', encoding='utf-8') as _f:
+            json.dump(_payload, _f, indent=2)
+        print(f"Actions JSON: {actions_json} ({len(_payload['actions'])} items)")
 
     # ── WHY analysis from QB TTM files ──
     why_rev    = {}   # revenue-only bullets
@@ -1309,6 +1328,8 @@ def main():
     parser.add_argument('--customers-json', default=None,
                         help='JSON file with top customers by bucket: {window, buckets:[{label,entity,sublabel,customers:[{name,value,pct}]}], footnote}')
     parser.add_argument('--output',       required=True)
+    parser.add_argument('--actions-json', default=None,
+                        help='Write structured action items here for downstream Asana task creation')
     parser.add_argument('--month',        required=True)
     parser.add_argument('--year',         required=True, type=int)
     args = parser.parse_args()
@@ -1360,7 +1381,8 @@ def main():
                          prior_qb_dir=args.prior_qb_dir,
                          ar_aging=ar_aging,
                          prev_months=prev_months,
-                         top_customers=top_customers)
+                         top_customers=top_customers,
+                         actions_json=args.actions_json)
 
     with open(args.output, 'w', encoding='utf-8') as f:
         f.write(html)
